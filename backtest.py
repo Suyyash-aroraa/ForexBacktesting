@@ -1,0 +1,1 @@
+## CSV SCHEMA = Date Time, Open, High, Low, Close, Volume
