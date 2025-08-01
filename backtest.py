@@ -49,20 +49,30 @@ class EMACalc:
         self.alpha = 1/(window-1)
         self.prevEMA = None
         self.window = window-1
-    def ema(self, cacheArr):
+    def ema(self, current_value):  # FIXED: Now accepts single value instead of array
         if self.prevEMA == None:
-            self.prevEMA = np.mean(cacheArr)
-        ema = (cacheArr[-1] + ((self.window - 1) * self.prevEMA)) / self.window
+            self.prevEMA = current_value  # FIXED: Initialize with current value, not mean
+        ema = (current_value + ((self.window - 1) * self.prevEMA)) / self.window  # FIXED: Use current_value
         self.prevEMA = ema
         return ema
 
 
 def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window = 14):
+    if len(cache.cacheArr) < 2:  # FIXED: Need at least 2 values for diff
+        return 0
+        
     deltaT = np.array(np.diff(cache.cacheArr))
     gains = np.array(np.where(deltaT>0, deltaT, 0))
     losses = np.array(np.where(deltaT<=0, -deltaT, 0))
-    avgGain = emaBuy.ema(gains)
-    avgLoss = emaLoss.ema(losses)
+    
+    # FIXED: Get only current period's gain/loss
+    current_gain = gains[-1] if len(gains) > 0 else 0
+    current_loss = losses[-1] if len(losses) > 0 else 0
+    
+    # FIXED: Pass single values instead of arrays
+    avgGain = emaBuy.ema(current_gain)
+    avgLoss = emaLoss.ema(current_loss)
+    
     if avgGain is None or avgLoss is None:
         return 0  # No signal until EMAs are initialized
 
@@ -75,35 +85,112 @@ def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window =
     elif RSI < overSold: return 1
     else: return 0
 
+class SMACrossOver:
+    def __init__(self, fastWindow = 7, slowWindow = 14):
+        self.fastWindow = fastWindow
+        self.slowWindow = slowWindow
+        self.prevSMASlow = None
+        self.prevSMAFast = None
+    def calc(self, cacheArr):
+        smaSlow = np.mean(cacheArr[(-self.slowWindow):])
+        smaFast = np.mean(cacheArr[(-self.fastWindow):])
+
+        if self.prevSMAFast == None:
+            self.prevSMAFast = smaFast
+            self.prevSMASlow = smaSlow
+            return 0
+        else:
+            if smaSlow < smaFast and self.prevSMASlow >= self.prevSMAFast:
+                crossover = 1
+                self.prevSMAFast = smaFast
+                self.prevSMASlow = smaSlow
+            elif smaSlow > smaFast and self.prevSMASlow <= self.prevSMAFast:
+                crossover = -1
+                self.prevSMAFast = smaFast
+                self.prevSMASlow = smaSlow
+            else: 
+                crossover = 0
+                self.prevSMAFast = smaFast
+                self.prevSMASlow = smaSlow
+
+            return crossover
+
+def smaCheck(cacheArr):
+    mean = np.mean(cacheArr)
+    current = cacheArr[-1]
+    if current > mean:
+        return 1
+    elif current < mean:
+        return -1
+    else: return 0
+
+def EMACheck(cacheArr, prevEma, period=14):
+    alpha = 2/(period+1)  # Fixed EMA alpha calculation
+    currentPrice = cacheArr[-1]
+    if prevEma[0] is None:  # Fixed initialization check
+        prevEma[0] = np.mean(cacheArr)
+    ema = alpha * currentPrice + (1-alpha) * prevEma[0]
+    prevEma[0] = ema  # Update the EMA value
+    
+    if currentPrice > ema:
+        return [ema, 1]
+    elif currentPrice < ema:
+        return [ema, -1]
+    else:
+        return [ema, 0]
+
 
 position = None
 entryPrice = None
 logPnL = []
-
 overbought_input = input("Enter RSI overbought (default 70): ")
 overbought = int(overbought_input) if overbought_input.strip() else 70
-
 oversold_input = input("Enter RSI oversold (default 30): ")
 oversold = int(oversold_input) if oversold_input.strip() else 30
-
-windowInput = input("Enter RSI window (default 14): ")
+windowInput = input("Enter RSI window  and slow SMA window (default 14): ")
 window1 = int(windowInput) if windowInput.strip() else 14
+
+windowInput2 = input("Enter fast SMA window  (default 7): ")
+window2 = int(windowInput2) if windowInput2.strip() else 7
+
 
 
 cache = Cache(window=window1)
 emaObj1 = EMACalc(window=window1)
 emaObj2 = EMACalc(window=window1)
+smaCalculator = SMACrossOver(slowWindow=window1, fastWindow=window2)
+weights = (1, 0)  
+takeLoss = None
+takeProfit = None
 
 while True:
-    signal = RSIBuyOrSell(cache,emaObj1, emaObj2, overBought=overbought, overSold=oversold)
-    if signal==1 and position == None:
+    RSIsignal = RSIBuyOrSell(cache,emaObj1, emaObj2, overBought=overbought, overSold=oversold)
+    SMAsignal = smaCalculator.calc(cache.cacheArr)
+    score = (RSIsignal * weights[0]) + (SMAsignal * weights[1]) 
+    
+    if score >= 0.6 and position == None:
         entryPrice = cache.cacheArr[-1] + (cache.cacheArr[-1] * 0.001)
         print(f"entered buy position at currentPrice = {entryPrice}")
         position = "buy"
-    if signal==-1 and position == "buy":
+        takeLoss = entryPrice - 0.005   
+        takeProfit = entryPrice + 0.010  
+        print(f"TP: {takeProfit:.5f}, SL: {takeLoss:.5f}")
+    if position == "buy":
+        current_price = cache.cacheArr[-1]
+        if current_price >= takeProfit:
+            pnl = current_price - entryPrice - (current_price * 0.001)
+            logPnL.append(pnl)
+            print(f"exited buy position at currentPrice = {current_price} (take profit)")
+            position = None
+        elif current_price <= takeLoss:
+            pnl = current_price - entryPrice - (current_price * 0.001)
+            logPnL.append(pnl)
+            print(f"exited buy position at currentPrice = {current_price} (stop loss)")
+            position = None    
+    if score <= -0.6 and position == "buy":
         pnl = cache.cacheArr[-1] - entryPrice - (cache.cacheArr[-1] * 0.001)
         logPnL.append(pnl)
-        print(f"exited buy position at currentPrice = {cache.cacheArr[-1]}")
+        print(f"exited buy position at currentPrice = {cache.cacheArr[-1]} (signal exit)")
         position = None
     if not cache.shiftCacheOne():
         if position == 'buy':
@@ -113,6 +200,7 @@ while True:
             position = None
         cache.csvFile_handle.close()
         break
+        
 totalTrades = len(logPnL)
 if totalTrades == 0:
     print("No trades made.")
@@ -122,14 +210,16 @@ else:
     profits = np.where(logPnL>0, logPnL, 0)
     winningTrades = np.count_nonzero(profits)
     losingTrades = np.count_nonzero(losses)
-    avgWin = np.mean(profits)
-    avgLoss = np.mean(losses)
+    
+    # Fixed average calculations to exclude zeros
+    avgWin = np.mean(profits[profits > 0]) if winningTrades > 0 else 0
+    avgLoss = np.mean(losses[losses > 0]) if losingTrades > 0 else 0
     winrate = float(float(winningTrades)/totalTrades * 100)
 
     print("\n=== BACKTEST SUMMARY ===")
     print(f"Total Trades: {totalTrades}")
-    print(f"Winning Trades: {np.count_nonzero(profits)}")
-    print(f"Losing Trades: {np.count_nonzero(losses)}")
+    print(f"Winning Trades: {winningTrades}")
+    print(f"Losing Trades: {losingTrades}")
     print(f"Average Win: {avgWin:.5f}")
     print(f"Average Loss: {avgLoss:.5f}")
     print(f"Winrate: {winrate:.2f}%")
