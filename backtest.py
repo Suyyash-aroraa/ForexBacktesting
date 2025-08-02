@@ -22,8 +22,11 @@ import os
 
 class Cache:
     
-    def __init__ (self, start = 0, csvFile = "./EURUSD_M5.csv", window = 14):
-        self.cacheArr = []
+    def __init__ (self, start = 0, csvFile = "./EURUSD_M15.csv", window = 14):
+        self.cacheArr = []  # Close prices
+        self.highArr = []   # High prices
+        self.lowArr = []    # Low prices
+        self.volumeArr = [] # Volume data
         self.start = start
         self.csvFile_handle = open(csvFile, "r")
         self.csvReader = csv.reader(self.csvFile_handle)
@@ -34,18 +37,41 @@ class Cache:
                 print(f"Warning: File has fewer than {window} lines. Skipping all available lines.")
         try:
             for line in self.csvReader:
-                self.cacheArr.append(float(line[4]))
+                self.cacheArr.append(float(line[4]))  # Close
+                self.highArr.append(float(line[2]))   # High
+                self.lowArr.append(float(line[3]))    # Low
+                self.volumeArr.append(float(line[5])) # Volume
                 window -=1
                 if window <= 0:
                     break
             self.cacheArr = np.array(self.cacheArr)
+            self.highArr = np.array(self.highArr)
+            self.lowArr = np.array(self.lowArr)
+            self.volumeArr = np.array(self.volumeArr)
         except Exception as e:
             print(f"Error {e}")
+            
     def shiftCacheOne(self):
         try:
-            new_price = float(next(self.csvReader)[4])
+            line = next(self.csvReader)
+            new_close = float(line[4])
+            new_high = float(line[2])
+            new_low = float(line[3])
+            new_volume = float(line[5])
+            
+            # Shift arrays
             self.cacheArr[:-1] = self.cacheArr[1:] 
-            self.cacheArr[-1] = new_price         
+            self.cacheArr[-1] = new_close
+            
+            self.highArr[:-1] = self.highArr[1:]
+            self.highArr[-1] = new_high
+            
+            self.lowArr[:-1] = self.lowArr[1:]
+            self.lowArr[-1] = new_low
+            
+            self.volumeArr[:-1] = self.volumeArr[1:]
+            self.volumeArr[-1] = new_volume
+            
             self.start += 1
             return True
         except StopIteration:
@@ -54,10 +80,27 @@ class Cache:
         except Exception as e:
             print(f"Error shifting cache: {e}")
             return False
+            
     def __del__(self):
         # Cleanup when object is destroyed
         if hasattr(self, 'csvFile_handle'):
             self.csvFile_handle.close()
+
+def calculateATR(cache, period=14):
+    if len(cache.cacheArr) < 2:
+        return 0
+    high_low = cache.highArr[-period:] - cache.lowArr[-period:]
+    if len(cache.cacheArr) >= period + 1:
+        high_close = np.abs(cache.highArr[-period:] - cache.cacheArr[-(period+1):-1])
+        low_close = np.abs(cache.lowArr[-period:] - cache.cacheArr[-(period+1):-1])
+    else:
+        high_close = np.abs(cache.highArr[-period:] - np.roll(cache.cacheArr[-period:], 1))
+        low_close = np.abs(cache.lowArr[-period:] - np.roll(cache.cacheArr[-period:], 1))
+        high_close[0] = high_low[0] 
+        low_close[0] = high_low[0]
+    true_ranges = np.maximum(high_low, np.maximum(high_close, low_close))
+    atr = np.mean(true_ranges)
+    return atr
 
 class EMACalc:
     def __init__(self, window):
@@ -71,12 +114,11 @@ class EMACalc:
         self.prevEMA = ema
         return ema
 
-
 def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window = 14):
     if len(cache.cacheArr) < 2:  
         return 0
         
-    deltaT = np.array(np.diff(cache.cacheArr))
+    deltaT = np.array(np.diff(cache.cacheArr[-window:]))
     gains = np.array(np.where(deltaT>0, deltaT, 0))
     losses = np.array(np.where(deltaT<=0, -deltaT, 0))
     current_gain = gains[-1] if len(gains) > 0 else 0
@@ -94,6 +136,7 @@ def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window =
         RSI = 100 - (100 / (1 + RS))
     if RSI > overBought: return -1
     elif RSI < overSold: return 1
+    elif RSI < 40: return 0.5  # Changed from RSI > 60 to RSI < 40
     else: return 0
 
 class SMACrossOver:
@@ -139,7 +182,7 @@ def EMACheck(cacheArr, prevEma, period=14):
     alpha = 2/(period+1)  
     currentPrice = cacheArr[-1]
     if prevEma[0] is None:  
-        prevEma[0] = np.mean(cacheArr)
+        prevEma[0] = np.mean(cacheArr[-period:])
     ema = alpha * currentPrice + (1-alpha) * prevEma[0]
     prevEma[0] = ema
     
@@ -149,7 +192,43 @@ def EMACheck(cacheArr, prevEma, period=14):
         return [ema, -1]
     else:
         return [ema, 0]
+    
+class MACD:
+    def __init__(self, fast=12, slow=26, signal=9):
+        self.fastPeriod = fast
+        self.slowPeriod = slow
+        self.signalPeriod = signal
+        self.prevFast = [None]
+        self.prevSlow = [None]
+        self.prevSignal = None 
+        
+    def macd(self, cacheArr):
+        emaFast = EMACheck(cacheArr=cacheArr, prevEma=self.prevFast, period=self.fastPeriod)
+        self.prevFast[0] = emaFast[0]
+        emaSlow = EMACheck(cacheArr=cacheArr, prevEma=self.prevSlow, period=self.slowPeriod)
+        self.prevSlow[0] = emaSlow[0]
 
+        macdLine = emaFast[0] - emaSlow[0]
+
+        alpha = 2 / (self.signalPeriod + 1)
+        if self.prevSignal is None:
+            self.prevSignal = macdLine
+        signalLine = alpha * macdLine + (1 - alpha) * self.prevSignal
+        self.prevSignal = signalLine
+
+        histogram = macdLine - signalLine
+
+        if histogram > 0:
+            return 1
+        elif histogram < 0:
+            return -1
+        else:
+            return 0
+        
+def liquidityIndicator(arr):
+    if arr[-1] > (1.3 * np.mean(arr[:-1])):
+        return True
+    else: return False
 
 position = None
 entryPrice = None
@@ -164,45 +243,62 @@ window1 = int(windowInput) if windowInput.strip() else 14
 windowInput2 = input("Enter fast SMA window  (default 7): ")
 window2 = int(windowInput2) if windowInput2.strip() else 7
 
-
-
-cache = Cache(window=window1)
+cache = Cache(window=max(window1, 26))
 emaObj1 = EMACalc(window=window1)
 emaObj2 = EMACalc(window=window1)
+macd = MACD(fast=max(window2,12), slow=max(window1, 26))
 smaCalculator = SMACrossOver(slowWindow=window1, fastWindow=window2)
-weights = (.5, 0.5)  
+weights = (.3, .3, .4)  #RSI, SMA, MACD
 takeLoss = None
 takeProfit = None
+buyAfterReversal = [False, None]
 
 while True:
-    RSIsignal = RSIBuyOrSell(cache,emaObj1, emaObj2, overBought=overbought, overSold=oversold)
+    RSIsignal = RSIBuyOrSell(cache,emaObj1, emaObj2, overBought=overbought, overSold=oversold, window=window1)
     SMAsignal = smaCalculator.calc(cache.cacheArr)
-    score = (RSIsignal * weights[0]) + (SMAsignal * weights[1]) 
+    macdSignal = macd.macd(cacheArr=cache.cacheArr)
+    score = (RSIsignal * weights[0]) + (SMAsignal * weights[1]) + (macdSignal * weights[2])
+    atr =  calculateATR(cache=cache, period=window1)
     
-    if score >= 0.6 and position == None:
-        entryPrice = cache.cacheArr[-1] + (cache.cacheArr[-1] * 0.001)
+    if score >= 0.6 and position == None and atr > 0.0002 and atr < 0.0008 and liquidityIndicator(cache.volumeArr) and RSIsignal >= 0.5 and not buyAfterReversal[0]:
+        buyAfterReversal = [True, cache.cacheArr[-1]]
+    
+    if buyAfterReversal[0] and cache.cacheArr[-1] < (buyAfterReversal[1] - 0.0001) and score >= 0.4:  # Changed to require bigger pullback and lower score threshold
+        entryPrice = cache.cacheArr[-1] + (cache.cacheArr[-1] * 0.0001)  # Reduced spread to realistic level
         print(f"entered buy position at currentPrice = {entryPrice}")
+        print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
         position = "buy"
-        takeLoss = entryPrice - 0.005   
-        takeProfit = entryPrice + 0.010  
+        takeLoss = entryPrice - (atr * 2)  # Tighter stop loss
+        takeProfit = entryPrice + (atr * 3)  # More reasonable take profit
+        buyAfterReversal = [False, None]  # Reset after entry
         print(f"TP: {takeProfit:.5f}, SL: {takeLoss:.5f}")
+    elif score < 0.4:  # Reset if conditions deteriorate
+        buyAfterReversal = [False, None]
+        
     if position == "buy":
         current_price = cache.cacheArr[-1]
         if current_price >= takeProfit:
-            pnl = current_price - entryPrice - (current_price * 0.001)
+            pnl = current_price - entryPrice #- (current_price * 0.0001)
             logPnL.append(pnl)
             print(f"exited buy position at currentPrice = {current_price} (take profit)")
+            print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
             position = None
         elif current_price <= takeLoss:
-            pnl = current_price - entryPrice - (current_price * 0.001)
+            pnl = current_price - entryPrice #- (current_price * 0.0001)
             logPnL.append(pnl)
             print(f"exited buy position at currentPrice = {current_price} (stop loss)")
+            print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
             position = None    
-    if score <= -0.6 and position == "buy":
-        pnl = cache.cacheArr[-1] - entryPrice - (cache.cacheArr[-1] * 0.001)
-        logPnL.append(pnl)
-        print(f"exited buy position at currentPrice = {cache.cacheArr[-1]} (signal exit)")
-        position = None
+            
+    if score <= -0.6 :
+        buyAfterReversal = [False, None]
+        if position == "buy":
+            pnl = cache.cacheArr[-1] - entryPrice #- (cache.cacheArr[-1] * 0.0001)
+            logPnL.append(pnl)
+            print(f"exited buy position at currentPrice = {cache.cacheArr[-1]} (signal exit)")
+            print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
+            position = None
+            
     if not cache.shiftCacheOne():
         if position == 'buy':
             pnl = cache.cacheArr[-1] - entryPrice
