@@ -180,9 +180,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you're working on quantitative trading strategies or technical analysis research, let's connect and share insights!
 
-**LinkedIn**: [https://www.linkedin.com/in/suyyash-arora/]
+**LinkedIn**: [Suyyash-arora](https://www.linkedin.com/in/suyyash-arora/
 **Email**: suyyash@myyahoo.com
 ---
 
 **⚠️ Disclaimer**: This is for educational and research purposes only. Past performance does not guarantee future results. Trading involves substantial risk of loss.
+
 
