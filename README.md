@@ -86,8 +86,8 @@ CSV data file (EURUSD_M15.csv)
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/forex-backtesting-engine
-cd forex-backtesting-engine
+git clone https://github.com/Suyyash-aroraa/ForexBacktesting
+cd ForexBacktesting
 ```
 
 2. **Prepare your data**
@@ -139,10 +139,10 @@ This implementation is guided by empirical research showing:
 Total Trades: 3
 Winning Trades: 2
 Losing Trades: 1
-Average Win: 0.01500
-Average Loss: 0.00800
+Average Win: 0.00993
+Average Loss: 0.00703
 Winrate: 66.67%
-Net PnL assuming trading 1 lot: +$1,282.00
+Net PnL assuming trading 100000units or 1lots: 1282.80
 ```
 
 ## 🛣️ Roadmap
@@ -180,9 +180,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you're working on quantitative trading strategies or technical analysis research, let's connect and share insights!
 
-**LinkedIn**: [Your LinkedIn Profile]
-**Email**: your.email@domain.com
-
+**LinkedIn**: [https://www.linkedin.com/in/suyyash-arora/]
+**Email**: suyyash@myyahoo.com
 ---
 
 **⚠️ Disclaimer**: This is for educational and research purposes only. Past performance does not guarantee future results. Trading involves substantial risk of loss.
+
