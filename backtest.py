@@ -159,7 +159,7 @@ cache = Cache(window=window1)
 emaObj1 = EMACalc(window=window1)
 emaObj2 = EMACalc(window=window1)
 smaCalculator = SMACrossOver(slowWindow=window1, fastWindow=window2)
-weights = (1, 0)  
+weights = (.5, 0.5)  
 takeLoss = None
 takeProfit = None
 
