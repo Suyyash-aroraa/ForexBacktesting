@@ -1,3 +1,19 @@
+#  <backtest.py>
+#  Copyright (C) 2025 Suyyash Raj Arora
+
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <https:www.gnu.org/licenses/>.
+
 # CSV SCHEMA = Date Time, Open, High, Low, Close, Volume
 import numpy as np
 import csv
@@ -6,7 +22,7 @@ import os
 
 class Cache:
     
-    def __init__ (self, start = 0, csvFile = "./EURUSD_M15.csv", window = 14):
+    def __init__ (self, start = 0, csvFile = "./EURUSD_M5.csv", window = 14):
         self.cacheArr = []
         self.start = start
         self.csvFile_handle = open(csvFile, "r")
@@ -28,9 +44,8 @@ class Cache:
     def shiftCacheOne(self):
         try:
             new_price = float(next(self.csvReader)[4])
-            # In-place shift (much faster)
-            self.cacheArr[:-1] = self.cacheArr[1:]  # Shift left
-            self.cacheArr[-1] = new_price           # Add new value
+            self.cacheArr[:-1] = self.cacheArr[1:] 
+            self.cacheArr[-1] = new_price         
             self.start += 1
             return True
         except StopIteration:
@@ -49,35 +64,31 @@ class EMACalc:
         self.alpha = 1/(window-1)
         self.prevEMA = None
         self.window = window-1
-    def ema(self, current_value):  # FIXED: Now accepts single value instead of array
+    def ema(self, current_value):
         if self.prevEMA == None:
-            self.prevEMA = current_value  # FIXED: Initialize with current value, not mean
-        ema = (current_value + ((self.window - 1) * self.prevEMA)) / self.window  # FIXED: Use current_value
+            self.prevEMA = current_value 
+        ema = (current_value + ((self.window - 1) * self.prevEMA)) / self.window
         self.prevEMA = ema
         return ema
 
 
 def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window = 14):
-    if len(cache.cacheArr) < 2:  # FIXED: Need at least 2 values for diff
+    if len(cache.cacheArr) < 2:  
         return 0
         
     deltaT = np.array(np.diff(cache.cacheArr))
     gains = np.array(np.where(deltaT>0, deltaT, 0))
     losses = np.array(np.where(deltaT<=0, -deltaT, 0))
-    
-    # FIXED: Get only current period's gain/loss
     current_gain = gains[-1] if len(gains) > 0 else 0
     current_loss = losses[-1] if len(losses) > 0 else 0
-    
-    # FIXED: Pass single values instead of arrays
     avgGain = emaBuy.ema(current_gain)
     avgLoss = emaLoss.ema(current_loss)
     
     if avgGain is None or avgLoss is None:
-        return 0  # No signal until EMAs are initialized
+        return 0  
 
     if avgLoss == 0:
-        RSI = 100  # All gains, no losses
+        RSI = 100 
     else:
         RS = avgGain / avgLoss
         RSI = 100 - (100 / (1 + RS))
@@ -125,12 +136,12 @@ def smaCheck(cacheArr):
     else: return 0
 
 def EMACheck(cacheArr, prevEma, period=14):
-    alpha = 2/(period+1)  # Fixed EMA alpha calculation
+    alpha = 2/(period+1)  
     currentPrice = cacheArr[-1]
-    if prevEma[0] is None:  # Fixed initialization check
+    if prevEma[0] is None:  
         prevEma[0] = np.mean(cacheArr)
     ema = alpha * currentPrice + (1-alpha) * prevEma[0]
-    prevEma[0] = ema  # Update the EMA value
+    prevEma[0] = ema
     
     if currentPrice > ema:
         return [ema, 1]
@@ -210,8 +221,6 @@ else:
     profits = np.where(logPnL>0, logPnL, 0)
     winningTrades = np.count_nonzero(profits)
     losingTrades = np.count_nonzero(losses)
-    
-    # Fixed average calculations to exclude zeros
     avgWin = np.mean(profits[profits > 0]) if winningTrades > 0 else 0
     avgLoss = np.mean(losses[losses > 0]) if losingTrades > 0 else 0
     winrate = float(float(winningTrades)/totalTrades * 100)
