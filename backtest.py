@@ -20,6 +20,31 @@ import csv
 import datetime as dt
 import os
 
+# Default Configuration Values
+DEFAULT_RSI_OVERBOUGHT = 70
+DEFAULT_RSI_OVERSOLD = 30
+DEFAULT_WINDOW = 14  # Default for RSI and slow SMA
+DEFAULT_FAST_WINDOW = 7  # Default for fast SMA
+DEFAULT_MACD_FAST = 12
+DEFAULT_MACD_SLOW = 26
+DEFAULT_MACD_SIGNAL = 10
+DEFAULT_BOLLINGER_PERIOD = 20
+DEFAULT_BOLLINGER_STD = 2
+DEFAULT_STOCHASTIC_D_PERIOD = 3
+DEFAULT_ATR_PERIOD = 14
+DEFAULT_SAR_ACCELERATION = 0.02
+DEFAULT_SAR_MAXIMUM = 0.2
+DEFAULT_SCORE_THRESHOLD = 0.2
+DEFAULT_MIN_ATR = 0.0003
+DEFAULT_MAX_ATR = 0.002
+DEFAULT_PRICE_REVERSAL = 0.0001
+DEFAULT_ENTRY_ADJUSTMENT = 0.00008
+DEFAULT_TP_ATR_MULTIPLIER = 4
+DEFAULT_SL_ATR_MULTIPLIER = 2
+DEFAULT_VWAP_PERIOD = 20
+DEFAULT_CMF_PERIOD = 20
+
+
 class Cache:
     
     def __init__ (self, start = 0, csvFile = "./EURUSD_M15.csv", window = 14):
@@ -114,7 +139,7 @@ class EMACalc:
         self.prevEMA = ema
         return ema
 
-def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window = 14):
+def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 72, overSold = 30, window = 14):
     if len(cache.cacheArr) < 2:  
         return 0
         
@@ -136,7 +161,8 @@ def RSIBuyOrSell(cache,emaBuy, emaLoss, overBought = 70, overSold = 30, window =
         RSI = 100 - (100 / (1 + RS))
     if RSI > overBought: return -1
     elif RSI < overSold: return 1
-    elif RSI < 40: return 0.5  # Changed from RSI > 60 to RSI < 40
+    elif RSI < 40: return 0.2  
+    elif RSI > 60: return -0.2 
     else: return 0
 
 class SMACrossOver:
@@ -194,7 +220,7 @@ def EMACheck(cacheArr, prevEma, period=14):
         return [ema, 0]
     
 class MACD:
-    def __init__(self, fast=12, slow=26, signal=9):
+    def __init__(self, fast=DEFAULT_MACD_FAST, slow=DEFAULT_MACD_SLOW, signal=DEFAULT_MACD_SIGNAL):
         self.fastPeriod = fast
         self.slowPeriod = slow
         self.signalPeriod = signal
@@ -230,72 +256,357 @@ def liquidityIndicator(arr):
         return True
     else: return False
 
+def williamR(cachArr, highArr, LowArr, period):
+    highestHigh = np.max(highArr[-period:])
+    lowestLow = np.min(LowArr[-period:])
+    close = cachArr[-1]
+    william = ((highestHigh-close)/(highestHigh-lowestLow)) *-100
+    if william > -20 and william <= -0:
+        return -1
+    elif william <= -80 and william >= -100:
+        return 1
+    elif william <-70 :
+        return 0.2
+    elif william > -30:  
+        return -0.2
+    else:
+        return 0
+
+def calculateADX(high_arr, low_arr, close_arr, period=14):
+    if len(high_arr) < period + 1:
+        return 0
+    highs = high_arr[-(period+1):]
+    lows = low_arr[-(period+1):]
+    closes = close_arr[-(period+1):]
+    
+    tr_values = []
+    plus_dm_values = []
+    minus_dm_values = []
+    
+    for i in range(1, len(highs)):
+        high_low = highs[i] - lows[i]
+        high_close = abs(highs[i] - closes[i-1])
+        low_close = abs(lows[i] - closes[i-1])
+        tr = max(high_low, high_close, low_close)
+        tr_values.append(tr)
+
+        up_move = highs[i] - highs[i-1]
+        down_move = lows[i-1] - lows[i]
+        
+        plus_dm = up_move if up_move > down_move and up_move > 0 else 0
+        minus_dm = down_move if down_move > up_move and down_move > 0 else 0
+        
+        plus_dm_values.append(plus_dm)
+        minus_dm_values.append(minus_dm)
+    
+    smoothed_tr = np.mean(tr_values)
+    smoothed_plus_dm = np.mean(plus_dm_values)
+    smoothed_minus_dm = np.mean(minus_dm_values)
+    
+    if smoothed_tr == 0:
+        return 0
+    
+    plus_di = (smoothed_plus_dm / smoothed_tr) * 100
+    minus_di = (smoothed_minus_dm / smoothed_tr) * 100
+    
+    if plus_di + minus_di == 0:
+        return 0
+    
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx  
+    if adx < 20:
+        return 0  # No trend
+    elif adx >= 30:
+        return 1 if plus_di > minus_di else -1  # Strong trend
+    else:
+        return 0.2 if plus_di > minus_di else -0.2  # Moderate trend\
+    
+class OBV:
+    def __init__(self):
+        self.obvArr = np.array([0])
+    def calc(self, closeArr, volArr):
+        if closeArr[-1] > closeArr[-2]:
+            newObv = self.obvArr[-1] + volArr[-1]
+        elif closeArr[-1] < closeArr[-2]:
+            newObv = self.obvArr[-1] - volArr[-1]
+        else:
+            newObv = self.obvArr[-1]
+        self.obvArr = np.append(self.obvArr, newObv)
+        if len(self.obvArr) > 20:
+            self.obvArr = self.obvArr[-10:]
+        if len(self.obvArr) < 5:
+            return 0
+        else:
+            smaObv = np.mean(self.obvArr[-6:-1])
+            if newObv > smaObv:
+                return 1
+            elif newObv < smaObv:
+                return -1
+            else: 
+                return 0
+            
+class CMF:
+    def __init__(self):
+        self.mfv = []
+        self.vol = []
+
+    def calc(self, closeArr, highArr, lowArr, volArr):
+        high = highArr[-1]
+        low = lowArr[-1]
+        close = closeArr[-1]
+        volume = volArr[-1]
+
+        if high == low:  # Avoid division by zero
+            mfm = 0
+        else:
+            mfm = ((2 * close) - high - low) / (high - low)
+
+        mfvCurrent = mfm * volume
+
+        self.mfv.append(mfvCurrent)
+        self.vol.append(volume)
+
+        if len(self.mfv) > 20:
+            self.mfv = self.mfv[-20:]
+            self.vol = self.vol[-20:]
+
+        if len(self.mfv) < 20:
+            return 0
+
+        cmf = np.sum(self.mfv) / np.sum(self.vol)
+
+        if cmf >= 0.2:
+            return 1
+        elif cmf >= 0.25:
+            return 0.2
+        elif cmf <= -0.2:
+            return -1
+        elif cmf <= -0.25:
+            return -0.2
+        else:
+            return 0
+        
+class VWAP:
+    def __init__(self):
+        self.typical_price_volume = []
+        self.volume = []
+
+    def calc(self, highArr, closeArr, lowArr, volArr):
+        high = highArr[-1]
+        low = lowArr[-1]
+        close = closeArr[-1]
+        volume = volArr[-1]
+
+        typical_price = (high + low + close) / 3
+        self.typical_price_volume.append(typical_price * volume)
+        self.volume.append(volume)
+
+        # Keep only the latest 20
+        if len(self.volume) > 20:
+            self.typical_price_volume = self.typical_price_volume[-20:]
+            self.volume = self.volume[-20:]
+
+        if len(self.volume) < 20:
+            return 0
+
+        vwap = np.sum(self.typical_price_volume) / np.sum(self.volume)
+        price_ratio = close / vwap
+
+        if price_ratio >= 1.01:
+            return 1
+        elif price_ratio >= 1.002:
+            return 0.2
+        elif price_ratio <= 0.99:
+            return -1
+        elif price_ratio <= 0.998:
+            return -0.2
+        else:
+            return 0
+
+class ParabolicSAR:
+    def __init__(self, af_step=DEFAULT_SAR_ACCELERATION, af_max=DEFAULT_SAR_MAXIMUM):
+        self.af = af_step         # Acceleration factor
+        self.af_step = af_step
+        self.af_max = af_max
+        self.ep = None            # Extreme point
+        self.sar = None           # SAR value
+        self.trend = None         # 'up' or 'down'
+
+    def calc(self, highArr, lowArr):
+        if len(highArr) < 2:
+            return 0  # Not enough data
+
+        high = highArr[-1]
+        low = lowArr[-1]
+
+        if self.trend is None:
+            # Initialize trend based on last two candles
+            if highArr[-1] > highArr[-2]:
+                self.trend = 'up'
+                self.ep = highArr[-1]
+                self.sar = lowArr[-2]
+            else:
+                self.trend = 'down'
+                self.ep = lowArr[-1]
+                self.sar = highArr[-2]
+            return 0
+
+        # Calculate SAR
+        self.sar = self.sar + self.af * (self.ep - self.sar)
+
+        if self.trend == 'up':
+            # Ensure SAR is not above last two lows
+            self.sar = min(self.sar, lowArr[-2], lowArr[-1])
+            if low < self.sar:
+                # Trend reversal
+                self.trend = 'down'
+                self.sar = self.ep
+                self.ep = low
+                self.af = self.af_step
+                return -1  # Sell signal
+            else:
+                if high > self.ep:
+                    self.ep = high
+                    self.af = min(self.af + self.af_step, self.af_max)
+                return 1  # Buy signal
+
+        elif self.trend == 'down':
+            # Ensure SAR is not below last two highs
+            self.sar = max(self.sar, highArr[-2], highArr[-1])
+            if high > self.sar:
+                # Trend reversal
+                self.trend = 'up'
+                self.sar = self.ep
+                self.ep = high
+                self.af = self.af_step
+                return 1  # Buy signal
+            else:
+                if low < self.ep:
+                    self.ep = low
+                    self.af = min(self.af + self.af_step, self.af_max)
+                return -1  # Sell signal
+
+        return 0  # Neutral
+
+
 position = None
 entryPrice = None
 logPnL = []
-overbought_input = input("Enter RSI overbought (default 70): ")
-overbought = int(overbought_input) if overbought_input.strip() else 70
-oversold_input = input("Enter RSI oversold (default 30): ")
-oversold = int(oversold_input) if oversold_input.strip() else 30
-windowInput = input("Enter RSI window  and slow SMA window (default 14): ")
-window1 = int(windowInput) if windowInput.strip() else 14
+overbought_input = input(f"Enter RSI overbought (default {DEFAULT_RSI_OVERBOUGHT}): ")
+overbought = int(overbought_input) if overbought_input.strip() else DEFAULT_RSI_OVERBOUGHT
+oversold_input = input(f"Enter RSI oversold (default {DEFAULT_RSI_OVERSOLD}): ")
+oversold = int(oversold_input) if oversold_input.strip() else DEFAULT_RSI_OVERSOLD
+windowInput = input(f"Enter RSI window and slow SMA window (default {DEFAULT_WINDOW}): ")
+window1 = int(windowInput) if windowInput.strip() else DEFAULT_WINDOW
 
-windowInput2 = input("Enter fast SMA window  (default 7): ")
-window2 = int(windowInput2) if windowInput2.strip() else 7
+windowInput2 = input(f"Enter fast SMA window (default {DEFAULT_FAST_WINDOW}): ")
+window2 = int(windowInput2) if windowInput2.strip() else DEFAULT_FAST_WINDOW
 
-cache = Cache(window=max(window1, 26))
+cache = Cache(window=max(window1, DEFAULT_MACD_SLOW))
 emaObj1 = EMACalc(window=window1)
 emaObj2 = EMACalc(window=window1)
-macd = MACD(fast=max(window2,12), slow=max(window1, 26))
+macd = MACD(fast=max(window2, DEFAULT_MACD_FAST), slow=max(window1, DEFAULT_MACD_SLOW))
 smaCalculator = SMACrossOver(slowWindow=window1, fastWindow=window2)
-weights = (.3, .3, .4)  #RSI, SMA, MACD
+
+obvObj = OBV()
 takeLoss = None
 takeProfit = None
 buyAfterReversal = [False, None]
+sellAfterReversal = [False, None] 
+vwapObj= VWAP()
+cmfObj = CMF()
+sar = ParabolicSAR()
 
 while True:
+    atr = calculateATR(cache)
     RSIsignal = RSIBuyOrSell(cache,emaObj1, emaObj2, overBought=overbought, overSold=oversold, window=window1)
     SMAsignal = smaCalculator.calc(cache.cacheArr)
     macdSignal = macd.macd(cacheArr=cache.cacheArr)
-    score = (RSIsignal * weights[0]) + (SMAsignal * weights[1]) + (macdSignal * weights[2])
-    atr =  calculateATR(cache=cache, period=window1)
+    williamRSignal = williamR(cachArr=cache.cacheArr, LowArr=cache.lowArr, highArr=cache.highArr, period=window1)
+    adxSignal = calculateADX(high_arr=cache.highArr, low_arr=cache.lowArr, period=window1, close_arr=cache.cacheArr)
+    obvSignal = obvObj.calc(closeArr=cache.cacheArr, volArr=cache.volumeArr)
+    cmfSignal = cmfObj.calc(closeArr=cache.cacheArr, highArr=cache.highArr, lowArr=cache.lowArr, volArr=cache.volumeArr)
+    vwapSignal = vwapObj.calc(cache.highArr, cache.cacheArr, cache.lowArr, cache.volumeArr)
+    sarSignal = sar.calc(cache.highArr, cache.lowArr)
+    trendScore = ((SMAsignal) + (adxSignal) + sarSignal)
+    momentumScore = (RSIsignal + macdSignal + williamRSignal)
+    volumeScore = (vwapSignal+cmfSignal+ obvSignal)
     
-    if score >= 0.6 and position == None and atr > 0.0002 and atr < 0.0008 and liquidityIndicator(cache.volumeArr) and RSIsignal >= 0.5 and not buyAfterReversal[0]:
+    score = (volumeScore + momentumScore + trendScore)/9
+    # print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, Williams R={williamRSignal}, ADX={adxSignal}, OBV={obvSignal} score={score}")
+        
+    
+    if score >= DEFAULT_SCORE_THRESHOLD and position == None and atr > DEFAULT_MIN_ATR and atr < DEFAULT_MAX_ATR and liquidityIndicator(cache.volumeArr) and (RSIsignal >= DEFAULT_SCORE_THRESHOLD or williamRSignal >= DEFAULT_SCORE_THRESHOLD) and not buyAfterReversal[0]:
         buyAfterReversal = [True, cache.cacheArr[-1]]
     
-    if buyAfterReversal[0] and cache.cacheArr[-1] < (buyAfterReversal[1] - 0.0001) and score >= 0.4:  # Changed to require bigger pullback and lower score threshold
-        entryPrice = cache.cacheArr[-1] + (cache.cacheArr[-1] * 0.0001)  # Reduced spread to realistic level
+    if buyAfterReversal[0] and cache.cacheArr[-1] < (buyAfterReversal[1] - DEFAULT_PRICE_REVERSAL) and score >= DEFAULT_SCORE_THRESHOLD:
+        entryPrice = cache.cacheArr[-1] + DEFAULT_ENTRY_ADJUSTMENT
         print(f"entered buy position at currentPrice = {entryPrice}")
-        print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
+        print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, Williams R={williamRSignal}, ADX={adxSignal}, OBV={obvSignal} score={score}")
         position = "buy"
-        takeLoss = entryPrice - (atr * 2)  # Tighter stop loss
-        takeProfit = entryPrice + (atr * 3)  # More reasonable take profit
-        buyAfterReversal = [False, None]  # Reset after entry
-        print(f"TP: {takeProfit:.5f}, SL: {takeLoss:.5f}")
-    elif score < 0.4:  # Reset if conditions deteriorate
+        takeLoss = entryPrice - (atr * DEFAULT_SL_ATR_MULTIPLIER)
+        takeProfit = entryPrice + (atr * DEFAULT_TP_ATR_MULTIPLIER)
         buyAfterReversal = [False, None]
+        print(f"TP: {takeProfit:.5f}, SL: {takeLoss:.5f}")
+    elif score < 0.2:
+        buyAfterReversal = [False, None]
+    if score <= -0.2 and position == None and atr > 0.0003 and atr < 0.002 and liquidityIndicator(cache.volumeArr) and (RSIsignal <= -0.2 or williamRSignal <= -0.2) and not sellAfterReversal[0]:
+        sellAfterReversal = [True, cache.cacheArr[-1]]
+    if sellAfterReversal[0] and cache.cacheArr[-1] > (sellAfterReversal[1] + 0.0001) and score <= -0.2:
+        entryPrice = cache.cacheArr[-1] - 0.00008
+        print(f"entered sell position at currentPrice = {entryPrice}")
+        print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, Williams R={williamRSignal}, ADX={adxSignal}, OBV={obvSignal} score={score}")
         
+        position = "sell"
+        takeProfit = entryPrice - (atr * 4)  # Profit target below entry for shorts
+        takeLoss = entryPrice + (atr * 2)    # Stop loss above entry for shorts
+        sellAfterReversal = [False, None]
+        print(f"TP: {takeProfit:.5f}, SL: {takeLoss:.5f}")
+    elif score > -0.2:
+        sellAfterReversal = [False, None]
     if position == "buy":
         current_price = cache.cacheArr[-1]
         if current_price >= takeProfit:
-            pnl = current_price - entryPrice #- (current_price * 0.0001)
+            pnl = current_price - entryPrice -  0.00008
             logPnL.append(pnl)
             print(f"exited buy position at currentPrice = {current_price} (take profit)")
             print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
             position = None
         elif current_price <= takeLoss:
-            pnl = current_price - entryPrice #- (current_price * 0.0001)
+            pnl = current_price - entryPrice - 0.00008
             logPnL.append(pnl)
             print(f"exited buy position at currentPrice = {current_price} (stop loss)")
             print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
-            position = None    
-            
-    if score <= -0.6 :
+            position = None
+    if position == "sell":
+        current_price = cache.cacheArr[-1]
+        if current_price <= takeProfit:  # Price going down is profit for shorts
+            pnl = entryPrice - current_price - 0.00008
+            logPnL.append(pnl)
+            print(f"exited sell position at currentPrice = {current_price} (take profit)")
+            print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
+            position = None
+        elif current_price >= takeLoss:  # Price going up is loss for shorts
+            pnl = entryPrice - current_price -  0.00008
+            logPnL.append(pnl)
+            print(f"exited sell position at currentPrice = {current_price} (stop loss)")
+            print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
+            position = None
+    if score <= -0.2:
         buyAfterReversal = [False, None]
         if position == "buy":
-            pnl = cache.cacheArr[-1] - entryPrice #- (cache.cacheArr[-1] * 0.0001)
+            pnl = cache.cacheArr[-1] - entryPrice -  0.00008
             logPnL.append(pnl)
             print(f"exited buy position at currentPrice = {cache.cacheArr[-1]} (signal exit)")
+            print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
+            position = None
+    
+    if score >= 0.2:
+        sellAfterReversal = [False, None]
+        if position == "sell":
+            pnl = entryPrice - cache.cacheArr[-1] - 0.00008
+            logPnL.append(pnl)
+            print(f"exited sell position at currentPrice = {cache.cacheArr[-1]} (signal exit)")
             print(f"RSI={RSIsignal}, SMA={SMAsignal}, MACD={macdSignal}, score={score}")
             position = None
             
@@ -304,6 +615,11 @@ while True:
             pnl = cache.cacheArr[-1] - entryPrice
             logPnL.append(pnl)
             print(f"forced exited buy position at currentPrice = {cache.cacheArr[-1]}")
+            position = None
+        elif position == 'sell':
+            pnl = entryPrice - cache.cacheArr[-1]
+            logPnL.append(pnl)
+            print(f"forced exited sell position at currentPrice = {cache.cacheArr[-1]}")
             position = None
         cache.csvFile_handle.close()
         break
