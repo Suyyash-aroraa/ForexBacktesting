@@ -21,7 +21,7 @@ import datetime as dt
 import os
 
 # Default Configuration Values
-DEFAULT_RSI_OVERBOUGHT = 70
+DEFAULT_RSI_OVERBOUGHT = 72
 DEFAULT_RSI_OVERSOLD = 30
 DEFAULT_WINDOW = 14  # Default for RSI and slow SMA
 DEFAULT_FAST_WINDOW = 7  # Default for fast SMA
